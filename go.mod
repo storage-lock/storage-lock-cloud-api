@@ -5,8 +5,8 @@ go 1.23
 require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/storage-lock/go-memory-storage v0.0.1
-	github.com/storage-lock/go-storage v0.0.3
-	github.com/storage-lock/go-storage-lock v0.0.7
+	github.com/storage-lock/go-storage v0.1.0
+	github.com/storage-lock/go-storage-lock v0.1.0
 )
 
 require (
