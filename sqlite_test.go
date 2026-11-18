@@ -18,6 +18,9 @@ func TestSqlitePathUsesAmpersand(t *testing.T) {
 	if strings.Contains(got, "(") {
 		t.Errorf("不能含 '(': %s", got)
 	}
+	if !strings.Contains(got, "wal_autocheckpoint=1000") {
+		t.Errorf("缺少 wal_autocheckpoint，WAL 会无限膨胀: %s", got)
+	}
 }
 
 // TestSqlitePathAppendsToExistingQuery 验证已有查询串时也要追加参数。
