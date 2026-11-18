@@ -47,10 +47,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace (
-	github.com/storage-lock/go-memory-storage => ../go-memory-storage
-	github.com/storage-lock/go-storage => ../go-storage
-	github.com/storage-lock/go-storage-lock => ../go-storage-lock
-)
-
 exclude github.com/ugorji/go v0.0.0-20171122102828-84cb69a8af83
