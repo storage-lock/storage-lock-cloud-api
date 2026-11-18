@@ -182,15 +182,20 @@ func openStorage(ctx context.Context, path, remoteURL, remoteToken string) (stor
 
 // sqlitePath 在 DSN 上追加并发相关的参数。
 //
-//   - _journal_mode(WAL)：允许读写并发，是 SQLite 多进程可用的前提；
-//   - _busy_timeout(5000)：写锁竞争时等待而不是立刻报 "database is locked"；
-//   - _synchronous(FULL)：崩溃后已提交的事务不丢，锁记录比性能重要；
-//   - _txlock(immediate)：BEGIN 立即取写锁，避免"读升级写"死锁。
+//   - _journal_mode=WAL：允许读写并发，是 SQLite 多进程可用的前提；
+//   - _busy_timeout=5000：写锁竞争时等待而不是立刻报 "database is locked"；
+//   - _synchronous=FULL：崩溃后已提交的事务不丢，锁记录比性能重要；
+//   - _txlock=immediate：BEGIN 立即取写锁，避免"读升级写"死锁。
+//
+// 参数分隔符必须是 "&"：写成 "(" 会让 mattn/go-sqlite3 静默忽略整串参数，
+// 后果是高并发下随机报 "database is locked"。这个坑踩过一次。
 func sqlitePath(path string) string {
-	if !strings.Contains(path, "?") {
-		return path + "?_journal_mode(WAL&_busy_timeout(5000&_synchronous(FULL(&_txlock(immediate"
+	const params = "_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate"
+	if strings.Contains(path, "?") {
+		// 已有查询串：用 & 追加，而不是原样返回（否则并发参数全部丢失）。
+		return path + "&" + params
 	}
-	return path
+	return path + "?" + params
 }
 
 func parseCIDRs(raw string) ([]*net.IPNet, error) {

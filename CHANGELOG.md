@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.2
+
+- 修复 SQLite DSN 分隔符写成 `(` 的 bug（会导致 WAL/busy_timeout 全部失效，
+  高并发下随机 "database is locked"）。
+- 修复已有查询串时并发参数被丢弃的问题。
+- 加 `sqlite_test.go` 锁住这两条。
+
 ## v0.2.1
 
 - 新增 `--remote` / `--remote-token`：接
