@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	remote_client "github.com/storage-lock/go-remote-storage/client"
 	"github.com/storage-lock/go-storage"
 	memory_storage "github.com/storage-lock/go-memory-storage"
 	sqlite3_storage "github.com/storage-lock/go-sqlite3-storage"
@@ -29,7 +30,9 @@ func main() {
 
 func run() error {
 	addr := flag.String("addr", envOr("STORAGE_LOCK_ADDR", ":8080"), "监听地址")
-	dataPath := flag.String("data", envOr("STORAGE_LOCK_DATA", "locks.db"), "SQLite 数据文件路径；empty 表示仅内存（不持久化）")
+	dataPath := flag.String("data", envOr("STORAGE_LOCK_DATA", "locks.db"), "SQLite 数据文件路径；empty 表示仅内存（不持久化）；配了 --remote 时忽略")
+	remoteURL := flag.String("remote", envOr("STORAGE_LOCK_REMOTE", ""), "远程存储服务地址（go-remote-storage）；配置后优先于本地 SQLite")
+	remoteToken := flag.String("remote-token", envOr("STORAGE_LOCK_REMOTE_TOKEN", ""), "远程存储服务的访问令牌")
 	tlsCert := flag.String("tls-cert", os.Getenv("STORAGE_LOCK_TLS_CERT"), "TLS 证书路径；为空则以明文 HTTP 启动")
 	tlsKey := flag.String("tls-key", os.Getenv("STORAGE_LOCK_TLS_KEY"), "TLS 私钥路径")
 	tenantKeySeed := flag.String("tenant-key", os.Getenv("STORAGE_LOCK_TENANT_KEY"), "租户 HMAC 主密钥（base64，至少 32 字节）。为空则每次启动随机生成，重启后旧租户全部失效")
@@ -44,7 +47,7 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	store, closer, err := openStorage(context.Background(), *dataPath)
+	store, closer, err := openStorage(context.Background(), *dataPath, *remoteURL, *remoteToken)
 	if err != nil {
 		return err
 	}
@@ -144,8 +147,21 @@ func run() error {
 	return nil
 }
 
-// openStorage 打开持久化后端。空路径表示仅内存（重启即丢，用于本地试用）。
-func openStorage(ctx context.Context, path string) (storage.Storage, func(), error) {
+// openStorage 打开持久化后端。
+//
+// 优先级：--remote（远程存储服务）> --data（本地 SQLite）> 内存。
+// 远程模式让同一台 VPS 上的多个进程、以及集群里其他机器共用同一份锁存储。
+func openStorage(ctx context.Context, path, remoteURL, remoteToken string) (storage.Storage, func(), error) {
+	if strings.TrimSpace(remoteURL) != "" {
+		rs, err := remote_client.New(ctx, remote_client.Config{
+			BaseURL: remoteURL,
+			Secret:  remoteToken,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("connect remote storage %q: %w", remoteURL, err)
+		}
+		return rs, func() { _ = rs.Close(context.Background()) }, nil
+	}
 	if strings.TrimSpace(path) == "" {
 		store := memory_storage.NewMemoryStorage()
 		return store, func() {}, nil

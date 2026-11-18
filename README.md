@@ -47,11 +47,24 @@ curl -X POST https://locks.example.com/api/v1/tenant
 | 慢客户端占住连接 | Read/Write/Idle 超时 + 单次存储操作超时 |
 | 资源耗尽 | systemd `MemoryMax=256M`、低权限用户、`ProtectSystem=strict` |
 
+## 三种存储后端
+
+| 模式 | 参数 | 适用 |
+|---|---|---|
+| 远程存储服务（推荐） | `--remote https://... --remote-token ...` | 多机共用一份锁存储 |
+| 本地 SQLite | `--data /var/lib/.../locks.db` | 单机部署 |
+| 内存 | `--data ""` | 本地试用，重启即丢 |
+
+`--remote` 指向 [go-remote-storage](https://github.com/storage-lock/go-remote-storage)
+起的服务。这样多个进程、多台机器都能共用同一个事实来源，而不用各自运维数据库。
+
 ## 快速开始（本机）
 
 ```bash
 go build -o cloud-api .
 ./cloud-api --addr 127.0.0.1:8080 --data ./locks.db
+# 或接远程存储服务
+./cloud-api --addr 127.0.0.1:8080 --remote http://127.0.0.1:8443 --remote-token "$TOKEN"
 ```
 
 领取租户、抢锁：

@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/storage-lock/go-memory-storage v0.1.0
+	github.com/storage-lock/go-remote-storage v0.1.0
 	github.com/storage-lock/go-sqlite3-storage v0.1.0
 	github.com/storage-lock/go-storage v0.1.0
 	github.com/storage-lock/go-storage-lock v0.1.0

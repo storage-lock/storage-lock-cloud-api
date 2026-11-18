@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.1
+
+- 新增 `--remote` / `--remote-token`：接
+  [go-remote-storage](https://github.com/storage-lock/go-remote-storage) 作为后端。
+  优先级 remote > data > memory。
+- 已在 VPS 实测完整链路：客户端 → 本服务（租户隔离）→ remote-storage → SQLite。
+
 ## v0.2.0
 
 ### 安全修复（破坏性：旧接口行为变化）
