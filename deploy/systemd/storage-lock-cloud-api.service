@@ -1,0 +1,47 @@
+[Unit]
+Description=Storage Lock public lock API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 专用低权限用户，别直接跑 root。
+User=storage-lock
+Group=storage-lock
+WorkingDirectory=/var/lib/storage-lock
+ExecStart=/usr/local/bin/cloud-api \
+    --addr 127.0.0.1:8080 \
+    --data /var/lib/storage-lock/locks.db
+
+# 主密钥从环境文件读取，不写进 unit 文件（unit 文件常被备份/进 git）。
+# 内容：STORAGE_LOCK_TENANT_KEY=<base64，至少 32 字节>
+EnvironmentFile=/etc/storage-lock/cloud-api.env
+
+# 只在本机回环暴露，公网入口交给 nginx。
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+# 加固：
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/storage-lock
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+LimitNOFILE=65535
+# 内存上限防止 OOM 拖垮整机；SQLite 缓存不大，256M 足够。
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
