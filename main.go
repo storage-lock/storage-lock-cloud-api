@@ -42,9 +42,15 @@ func run() error {
 	perIP := flag.Float64("per-ip-per-min", 120, "每 IP 每分钟请求上限")
 	perTenant := flag.Float64("per-tenant-per-min", 600, "每租户每分钟请求上限")
 	defaultTTL := flag.Duration("default-ttl", 30*time.Second, "默认租约时长")
+	logLevel := flag.String("log-level", envOr("STORAGE_LOCK_LOG_LEVEL", "info"),
+		"日志级别：debug/info/warn/error")
+	logFormat := flag.String("log-format", envOr("STORAGE_LOCK_LOG_FORMAT", "json"),
+		"日志格式：json（生产）或 text（人读）")
 	flag.Parse()
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger, err := newLogger(*logLevel, *logFormat)
+	if err != nil {
+		return err
+	}
 	slog.SetDefault(logger)
 
 	store, closer, err := openStorage(context.Background(), *dataPath, *remoteURL, *remoteToken)

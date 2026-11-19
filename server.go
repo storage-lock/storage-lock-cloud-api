@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/storage-lock/go-remote-storage/logx"
 	"github.com/storage-lock/go-storage"
 	storage_lock "github.com/storage-lock/go-storage-lock"
 )
@@ -34,6 +36,7 @@ type Server struct {
 	nowFn     func() time.Time
 	healthFn  func() error
 	endpoints *endpointRegistry
+	rateStats *logx.RateLimitStats
 }
 
 func newServer(store storage.Storage, key *tenantKey, limits *limiters,
@@ -43,6 +46,7 @@ func newServer(store storage.Storage, key *tenantKey, limits *limiters,
 	return &Server{
 		store: store, key: key, limits: limits, options: options, trusted: trusted,
 		maxBody: 8 << 10, logger: logger, nowFn: time.Now,
+		rateStats: &logx.RateLimitStats{},
 	}
 }
 
@@ -58,7 +62,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "unknown endpoint")
 	})
-	return s.recoverPanic(s.limitByIP(mux))
+	// 访问日志在最外层：保证每个请求都有 request_id，且回写给客户端。
+	return s.recoverPanic(logx.Middleware(logx.MiddlewareOptions{
+		Logger:        s.logger,
+		SlowThreshold: 3 * time.Second,
+		ClientIP:      func(r *http.Request) string { return clientIP(r, s.trusted) },
+	})(s.limitByIP(mux)))
 }
 
 // ---- 中间件 ----
@@ -68,7 +77,11 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				s.logger.Error("panic recovered", "path", r.URL.Path, "panic", rec)
+				s.logger.Error("panic recovered",
+					"event", logx.EventPanic,
+					"request_id", logx.RequestIDFrom(r.Context()),
+					"path", r.URL.Path,
+					"panic", rec)
 				writeErr(w, http.StatusInternalServerError, "internal", "internal error")
 			}
 		}()
@@ -82,6 +95,7 @@ func (s *Server) limitByIP(next http.Handler) http.Handler {
 		ip := clientIP(r, s.trusted)
 		if ok, wait := s.limits.perIP.allow(ip); !ok {
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
+			s.rateStats.IncIP()
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests from this address")
 			return
 		}
@@ -101,11 +115,21 @@ func (s *Server) withTenant(next http.HandlerFunc) http.HandlerFunc {
 		}
 		tenantID, err := s.key.verify(secret)
 		if err != nil {
+			// 安全事件：只记 IP 与路径，绝不记 secret 本身。
+			s.logger.Warn("authentication failed",
+				"event", logx.EventAuthFailure,
+				"request_id", logx.RequestIDFrom(r.Context()),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"ip", clientIP(r, s.trusted),
+				"reason", err.Error(),
+			)
 			writeErr(w, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
 		if ok, wait := s.limits.perUser.allow(tenantID); !ok {
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
+			s.rateStats.IncUser()
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests for this tenant")
 			return
 		}
@@ -289,7 +313,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request, tenantID, id st
 	}
 	lock, err := s.lockFor(tenantID, id, ttl)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	owner := strings.TrimSpace(req.OwnerID)
@@ -320,7 +344,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request, tenantID, id st
 		}
 	}
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 
@@ -328,7 +352,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request, tenantID, id st
 	if err != nil {
 		// 已经拿到锁却读不到状态，释放掉避免泄漏。
 		s.releaseQuietly(lock, owner, readMode)
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, acquireResult{
@@ -358,18 +382,18 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request, tenantID, id stri
 	}
 	lock, err := s.lockFor(tenantID, id, ttl)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	ctx, cancel := timeoutCtx(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := lock.Renew(ctx, req.OwnerID); err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	status, err := lock.Inspect(ctx)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, acquireResult{
@@ -399,7 +423,7 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request, tenantID, id st
 	}
 	lock, err := s.lockFor(tenantID, id, 0)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	ctx, cancel := timeoutCtx(r.Context(), 10*time.Second)
@@ -413,7 +437,7 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request, tenantID, id st
 		err = lock.UnLock(ctx, owner)
 	}
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"lock_id": id, "owner_id": owner, "status": "released"})
@@ -422,14 +446,14 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request, tenantID, id st
 func (s *Server) inspect(w http.ResponseWriter, r *http.Request, tenantID, id string) {
 	lock, err := s.lockFor(tenantID, id, 0)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	ctx, cancel := timeoutCtx(r.Context(), 5*time.Second)
 	defer cancel()
 	status, err := lock.Inspect(ctx)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lockView{
@@ -449,14 +473,14 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request, tenantID, id st
 func (s *Server) waiters(w http.ResponseWriter, r *http.Request, tenantID, id string) {
 	lock, err := s.lockFor(tenantID, id, 0)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	ctx, cancel := timeoutCtx(r.Context(), 5*time.Second)
 	defer cancel()
 	status, err := lock.Inspect(ctx)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	// 只返回等待者身份与模式，不回传对方的锁内容。
@@ -486,7 +510,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 	items, err := storage_lock.ListLocks(ctx, s.store, prefix)
 	if err != nil {
-		s.writeLockError(w, err)
+		s.writeLockError(w, r.Context(), err)
 		return
 	}
 	views := []lockView{}
@@ -538,7 +562,7 @@ func (s *Server) releaseQuietly(lock *storage_lock.StorageLock, owner string, re
 	_ = lock.UnLock(ctx, owner)
 }
 
-func (s *Server) writeLockError(w http.ResponseWriter, err error) {
+func (s *Server) writeLockError(w http.ResponseWriter, ctx context.Context, err error) {
 	if err == nil {
 		return
 	}
@@ -556,7 +580,10 @@ func (s *Server) writeLockError(w http.ResponseWriter, err error) {
 	case errors.Is(err, storage_lock.ErrOwnerIdEmpty):
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		s.logger.Error("lock operation failed", "err", err)
+		s.logger.Error("lock operation failed",
+			"event", logx.EventStorageError,
+			"request_id", logx.RequestIDFrom(ctx),
+			"err", err)
 		writeErr(w, http.StatusInternalServerError, "internal", "storage operation failed")
 	}
 }

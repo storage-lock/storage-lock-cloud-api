@@ -28,8 +28,8 @@ github.com/storage-lock/go-events v0.0.5 h1:V8R4wYQ0q7KWZ2cfIdgctMhNY8Uiwgt0a1N3
 github.com/storage-lock/go-events v0.0.5/go.mod h1:eJtZJlcZEKJgDDzuLw+rCrdy3vImJZGQ6gsb55OOcZ4=
 github.com/storage-lock/go-memory-storage v0.1.0 h1:iK0qQTFofjUJnIHiqFSaWZutoOYy+UNwadQXWuUjj8k=
 github.com/storage-lock/go-memory-storage v0.1.0/go.mod h1:4h4m+tnHjgTqhkCLuVYrMYvidiZaYKckrga3AP6lCl4=
-github.com/storage-lock/go-remote-storage v0.1.0 h1:1RwGxQMpMyx+Lke3N/AJVhBoY+wuSmb/T0s59uNEWTY=
-github.com/storage-lock/go-remote-storage v0.1.0/go.mod h1:WM5NjP582SN06n4ACtUJYPLG6HBmdsBmnQPp/gKNnS8=
+github.com/storage-lock/go-remote-storage v0.1.7 h1:xYZ7CToBDYI3c6AxNXfZhNUlM69IzA0jhvy5KiybSb4=
+github.com/storage-lock/go-remote-storage v0.1.7/go.mod h1:WM5NjP582SN06n4ACtUJYPLG6HBmdsBmnQPp/gKNnS8=
 github.com/storage-lock/go-sqlite3-storage v0.1.0 h1:P4a3eJgq4gZKhnQGDx4PgobnJ9pqE4RVSh88GhfzmP8=
 github.com/storage-lock/go-sqlite3-storage v0.1.0/go.mod h1:BShuyWCxe7zvkCh1japg5wdsqxTefDv7HmTj94jUWqs=
 github.com/storage-lock/go-storage v0.1.0 h1:rMdGHd/0TNGkLpQpurW2q2zSaQ/zircwJ/oPdZDqZG8=

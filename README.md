@@ -164,6 +164,35 @@ with lock.hold("order-42", ttl="30s") as token:
 
 `hold()` 自动获取、后台续租、退出释放；续租失败（锁被抢）会抛 `NotOwner`。
 
+## 日志
+
+默认 JSON 格式输出到 stdout（systemd 下进 journald）：
+
+```bash
+--log-level debug|info|warn|error   # 默认 info
+--log-format json|text              # 默认 json
+```
+
+每个请求一条访问日志，含 `request_id` / 方法 / 路径 / 状态 / 耗时 / IP，
+并按状态码分级（2xx DEBUG、4xx WARN、5xx ERROR）。`request_id` 会回写到
+`X-Request-Id` 响应头——报障时把它给我。
+
+安全事件用固定 `event` 名，便于配告警：
+
+| event | 含义 |
+|---|---|
+| `auth_failure` | 凭据无效，含 IP 与失败原因 |
+| `rate_limited` | 聚合输出的限流命中 |
+| `storage_error` | 存储操作失败 |
+| `panic_recovered` | 请求处理 panic |
+| `slow_request` | 超过 3s 的请求 |
+
+**凭据绝不进日志**：访问日志根本不记录请求头、请求体、查询串——
+比"先记录再脱敏"可靠。有测试断言日志里搜不到完整 token。
+
+journald 会自动轮转，但要在 `/etc/systemd/journald.conf` 设 `SystemMaxUse`
+限制总容量，否则 journal 会一直涨到写满磁盘（`install.sh` 会检查并提示）。
+
 ## 限流
 
 默认每 IP 每分钟 120 次、每租户每分钟 600 次，可用参数调整。
