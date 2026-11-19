@@ -15,6 +15,7 @@ import (
 	"time"
 
 	remote_client "github.com/storage-lock/go-remote-storage/client"
+	"github.com/storage-lock/go-remote-storage/metrics"
 	"github.com/storage-lock/go-storage"
 	memory_storage "github.com/storage-lock/go-memory-storage"
 	sqlite3_storage "github.com/storage-lock/go-sqlite3-storage"
@@ -46,6 +47,7 @@ func run() error {
 		"日志级别：debug/info/warn/error")
 	logFormat := flag.String("log-format", envOr("STORAGE_LOCK_LOG_FORMAT", "json"),
 		"日志格式：json（生产）或 text（人读）")
+	metricsEnable := flag.Bool("metrics", true, "是否暴露 /metrics（Prometheus 指标）")
 	flag.Parse()
 	logger, err := newLogger(*logLevel, *logFormat)
 	if err != nil {
@@ -102,16 +104,25 @@ func run() error {
 		}
 	}
 
+	var mreg *metrics.Registry
+	if *metricsEnable {
+		mreg = metrics.New("storage_lock_cloud")
+	}
 	srv := newServer(store, key, limits, options, trusted, logger)
+	srv.metrics = mreg
 	srv.endpoints = reg
 	srv.healthFn = func() error {
 		_, err := store.GetTime(context.Background())
 		return err
 	}
 
+	routes := srv.routes()
+	if mreg != nil {
+		routes = metrics.HTTPMiddleware(mreg, routes)
+	}
 	httpServer := &http.Server{
 		Addr:              *addr,
-		Handler:           srv.routes(),
+		Handler:           routes,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// 长轮询 / wait=true 的请求可能超过 WriteTimeout，这里设成上限的 2 倍。

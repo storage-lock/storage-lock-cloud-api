@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/storage-lock/go-remote-storage/logx"
+	"github.com/storage-lock/go-remote-storage/metrics"
 	"github.com/storage-lock/go-storage"
 	storage_lock "github.com/storage-lock/go-storage-lock"
 )
@@ -37,6 +38,7 @@ type Server struct {
 	healthFn  func() error
 	endpoints *endpointRegistry
 	rateStats *logx.RateLimitStats
+	metrics   *metrics.Registry
 }
 
 func newServer(store storage.Storage, key *tenantKey, limits *limiters,
@@ -53,6 +55,11 @@ func newServer(store storage.Storage, key *tenantKey, limits *limiters,
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	if s.metrics != nil {
+		// 指标端点不鉴权：只暴露聚合量，不含租户信息。
+		// 部署上只监听回环，公网入口的 nginx 不转发该路径。
+		mux.Handle("/metrics", s.metrics.Handler())
+	}
 	mux.HandleFunc("/api/v1/tenant", s.handleTenant)
 	mux.HandleFunc("/api/v1/tenants", s.handleTenant) // 兼容复数拼写
 	mux.HandleFunc("/api/v1/endpoints", s.handleEndpoints)
@@ -96,6 +103,9 @@ func (s *Server) limitByIP(next http.Handler) http.Handler {
 		if ok, wait := s.limits.perIP.allow(ip); !ok {
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
 			s.rateStats.IncIP()
+			if s.metrics != nil {
+				s.metrics.IncRateLimited("ip")
+			}
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests from this address")
 			return
 		}
@@ -115,6 +125,9 @@ func (s *Server) withTenant(next http.HandlerFunc) http.HandlerFunc {
 		}
 		tenantID, err := s.key.verify(secret)
 		if err != nil {
+			if s.metrics != nil {
+				s.metrics.IncAuthFailure()
+			}
 			// 安全事件：只记 IP 与路径，绝不记 secret 本身。
 			s.logger.Warn("authentication failed",
 				"event", logx.EventAuthFailure,
@@ -130,6 +143,9 @@ func (s *Server) withTenant(next http.HandlerFunc) http.HandlerFunc {
 		if ok, wait := s.limits.perUser.allow(tenantID); !ok {
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
 			s.rateStats.IncUser()
+			if s.metrics != nil {
+				s.metrics.IncRateLimited("tenant")
+			}
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests for this tenant")
 			return
 		}
